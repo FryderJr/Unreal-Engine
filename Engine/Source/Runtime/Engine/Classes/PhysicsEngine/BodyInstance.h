@@ -53,7 +53,14 @@ namespace EDOFMode
 	};
 }
 
-struct FBodyInstnace;
+struct FBodyInstance;
+
+#if WITH_PHYSX
+namespace physx
+{
+	class PxContactModifyPair;
+}
+#endif // WITH_PHYSX
 
 #define USE_BODYINSTANCE_DEBUG_NAMES ((WITH_EDITORONLY_DATA || UE_BUILD_DEBUG || LOOKING_FOR_PERF_ISSUES || CHAOS_CHECKED) && !(UE_BUILD_SHIPPING || UE_BUILD_TEST) && !NO_LOGGING)
 
@@ -268,6 +275,9 @@ private:
 	/** Extra mask for filtering. Look at declaration for logic */
 	FMaskFilter MaskFilter;
 
+	/** The local bounds for the body (use CalculateLocalBounds to calculate this first) */
+	FBox LocalBounds;
+
 	/**
 	* Type of collision enabled.
 	* 
@@ -357,6 +367,18 @@ public:
 	UPROPERTY(EditAnywhere, Category = Physics, meta = (editcondition = "bSimulatePhysics", InlineEditConditionToggle))
 	uint8 bOverrideMaxAngularVelocity : 1;
 
+	/** Force the center the mass to be the center of the body. (Center of mass offset can then also be used for absolute offset)*/
+	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadWrite, Category = Physics, meta = (DisplayName = "Centralize Mass"))
+	uint32 bCentraliseMass : 1; // So we can balance the vehicles properly.
+
+	/**	Should inertia tensor be overridden? */
+	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category = Physics)
+	uint32 bOverrideInertiaTensor : 1; // So we can customise mass response.
+
+	/** The inertia tensor to use or this object - will subsequently be scaled by mass.*/
+	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category = Physics, meta = (editcondition = "bOverrideInertiaTensor"))
+	FVector InertiaTensor;
+
 
 	/** 
 	 * @HACK:
@@ -418,6 +440,12 @@ public:
 	/** [PhysX Only] This physics body's solver iteration count for velocity. Increasing this will be more CPU intensive, but better stabilized. */
 	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category = Physics)
 	uint8 VelocitySolverIterationCount;
+
+	/** Calculate the local bounds for the body */
+	const FBox& CalculateLocalBounds(const FVector& scale)
+	{
+		UpdateBodyScale(scale, true); return LocalBounds;
+	}
 
 private:
 	/** Custom Channels for Responses*/
@@ -491,6 +519,10 @@ public:
 	void CreateDOFLock();
 
 	static EDOFMode::Type ResolveDOFMode(EDOFMode::Type DOFMode);
+
+#if WITH_PHYSX
+	void ModifyContact(physx::PxContactModifyPair& pair, uint32 pairIndex, const FBodyInstance* other) const;
+#endif
 
 	/** [Physx Only] Constraint used to allow for easy DOF setup per bodyinstance */
 	FConstraintInstance* DOFConstraint;

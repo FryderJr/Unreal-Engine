@@ -1503,6 +1503,14 @@ void FPhysicsInterface_PhysX::AddAngularImpulseInRadians_AssumesLocked(const FPh
 	}
 }
 
+void FPhysicsInterface_PhysX::AddForce_AssumesLocked(const FPhysicsActorHandle_PhysX& InActorHandle, const FVector& InForce)
+{
+	if (PxRigidBody* Body = GetPx<PxRigidBody>(InActorHandle))
+	{
+		Body->addForce(U2PVector(InForce), PxForceMode::eFORCE);
+	}
+}
+
 void FPhysicsInterface_PhysX::AddVelocity_AssumesLocked(const FPhysicsActorHandle_PhysX& InActorHandle, const FVector& InForce)
 {
 	if(PxRigidBody* Body = GetPx<PxRigidBody>(InActorHandle))
@@ -1518,6 +1526,15 @@ void FPhysicsInterface_PhysX::AddAngularVelocityInRadians_AssumesLocked(const FP
 		Body->addTorque(U2PVector(InTorque), PxForceMode::eVELOCITY_CHANGE);
 	}
 }
+
+void FPhysicsInterface_PhysX::AddForceAtLocation_AssumesLocked(const FPhysicsActorHandle_PhysX& InActorHandle, const FVector& InImpulse, const FVector& InLocation)
+{
+	if (PxRigidBody* Body = GetPx<PxRigidBody>(InActorHandle))
+	{
+		PxRigidBodyExt::addForceAtPos(*Body, U2PVector(InImpulse), U2PVector(InLocation), PxForceMode::eFORCE);
+	}
+}
+
 
 void FPhysicsInterface_PhysX::AddImpulseAtLocation_AssumesLocked(const FPhysicsActorHandle_PhysX& InActorHandle, const FVector& InImpulse, const FVector& InLocation)
 {

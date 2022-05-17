@@ -1670,7 +1670,7 @@ void FChaosEngineInterface::UpdateMaterial(FPhysicsMaterialHandle_PhysX& InHandl
 
 		PMaterial->setStaticFriction(InMaterial->Friction);
 		PMaterial->setDynamicFriction(InMaterial->Friction);
-		PMaterial->setRestitution(InMaterial->Restitution);
+		PMaterial->setRestitution(FMath::Clamp(InMaterial->Restitution, 0.0f, 1.0f));
 
 		const uint32 UseFrictionCombineMode = (InMaterial->bOverrideFrictionCombineMode ? InMaterial->FrictionCombineMode.GetValue() : UPhysicsSettingsCore::Get()->FrictionCombineMode.GetValue());
 		PMaterial->setFrictionCombineMode(static_cast<physx::PxCombineMode::Enum>(UseFrictionCombineMode));

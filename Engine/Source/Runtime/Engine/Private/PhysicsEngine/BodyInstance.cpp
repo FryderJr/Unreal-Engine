@@ -63,6 +63,101 @@
 #include "PhysicalMaterials/PhysicalMaterial.h"
 #include "PhysicsEngine/PhysicsSettings.h"
 
+/** Structures and classes used for modifying collision contacts, eventually entering the ModifyContact function of an AActor. */
+
+struct FBodyInstanceContactModifyCallback : public FContactModifyCallback
+{
+	virtual ~FBodyInstanceContactModifyCallback() { }
+
+	/**
+	\brief Passes modifiable arrays of contacts to the application.
+
+	The initial contacts are as determined fresh each frame by collision detection.
+
+	The number of contacts can not be changed, so you cannot add your own contacts.  You may however
+	disable contacts using PxContactSet::ignore().
+
+	@see PxContactModifyPair
+	*/
+	virtual void onContactModify(PxContactModifyPair* const pairs, PxU32 count) override
+	{
+		for (PxU32 i = 0; i < count; i++)
+		{
+			auto& pair = pairs[i];
+
+			const PxActor* PActor0 = pair.actor[0];
+			const PxActor* PActor1 = pair.actor[1];
+			check(PActor0 && PActor1);
+
+			const PxRigidBody* PRigidBody0 = PActor0->is<PxRigidBody>();
+			const PxRigidBody* PRigidBody1 = PActor1->is<PxRigidBody>();
+
+			const FBodyInstance* BodyInst0 = FPhysxUserData::Get<FBodyInstance>(PActor0->userData);
+			const FBodyInstance* BodyInst1 = FPhysxUserData::Get<FBodyInstance>(PActor1->userData);
+
+			if (BodyInst0 != BodyInst1)
+			{
+				if (BodyInst0 != NULL &&
+					BodyInst0->bContactModification)
+				{
+					BodyInst0->ModifyContact(pair, 0, BodyInst1);
+				}
+
+				if (BodyInst1 != NULL &&
+					BodyInst1->bContactModification)
+				{
+					BodyInst1->ModifyContact(pair, 1, BodyInst0);
+				}
+			}
+		}
+	}
+};
+
+/** Interface for the creation of contact modify callbacks. */
+class FBodyInstanceContactModifyCallbackFactory : public IContactModifyCallbackFactory
+{
+public:
+
+	virtual FContactModifyCallback* Create(FPhysScene_PhysX* PhysScene) override
+	{
+		return new FBodyInstanceContactModifyCallback();
+	}
+
+	virtual void Destroy(FContactModifyCallback* Callback) override
+	{
+		delete Callback;
+	}
+};
+
+class FBodyInstanceContactModifyCallbackInstanciator
+{
+public:
+
+	FBodyInstanceContactModifyCallbackInstanciator()
+	{
+		FPhysScene_PhysX::ContactModifyCallbackFactory = TSharedPtr<IContactModifyCallbackFactory>(new FBodyInstanceContactModifyCallbackFactory());
+	}
+};
+
+static FBodyInstanceContactModifyCallbackInstanciator BodyInstanceContactModifyCallbackFactory;
+
+void FBodyInstance::ModifyContact(physx::PxContactModifyPair& pair, uint32 pairIndex, const FBodyInstance* other) const
+{
+	if (other != nullptr &&
+		OwnerComponent.IsValid() &&
+		other->OwnerComponent.IsValid())
+	{
+		auto actor0 = OwnerComponent->GetOwner();
+		auto actor1 = other->OwnerComponent->GetOwner();
+
+		if (actor0 != nullptr &&
+			actor1 != nullptr)
+		{
+			actor0->ModifyContact(pairIndex, actor1, pair.contacts);
+		}
+	}
+}
+
 DECLARE_CYCLE_STAT(TEXT("Init Body"), STAT_InitBody, STATGROUP_Physics);
 DECLARE_CYCLE_STAT(TEXT("Init Body Debug"), STAT_InitBodyDebug, STATGROUP_Physics);
 DECLARE_CYCLE_STAT(TEXT("Init Body Scene Interaction"), STAT_InitBodySceneInteraction, STATGROUP_Physics);
@@ -328,6 +423,7 @@ FBodyInstance::FBodyInstance()
 	, InstanceBoneIndex(INDEX_NONE)
 	, ObjectType(ECC_WorldStatic)
 	, MaskFilter(0)
+	, LocalBounds(EForceInit::ForceInit)
 	, CollisionEnabled(ECollisionEnabled::QueryAndPhysics)
 #if WITH_PHYSX
 	, CurrentSceneState(BodyInstanceSceneState::NotAdded)
@@ -346,6 +442,9 @@ FBodyInstance::FBodyInstance()
 	, bLockYRotation(false)
 	, bLockZRotation(false)
 	, bOverrideMaxAngularVelocity(false)
+	, bCentraliseMass(false)
+	, bOverrideInertiaTensor(false)
+	, InertiaTensor(1.0f, 1.0f, 1.0f)
 	, bOverrideMaxDepenetrationVelocity(false)
 	, bOverrideWalkableSlopeOnInstance(false)
 	, bInterpolateWhenSubStepping(true)
@@ -1158,6 +1257,9 @@ static void GetSimulatingAndBlendWeight(const USkeletalMeshComponent* SkelMeshCo
 	}
 }
 
+TAutoConsoleVariable<int32> CVehicleRestOffset(TEXT("p.VehicleRestOffset"), 3, TEXT("The rest offset for vehicles."));
+TAutoConsoleVariable<int32> CVehicleContactOffset(TEXT("p.VehicleContactOffset"), 5, TEXT("The contact offset for vehicles."));
+
 void FInitBodiesHelperBase::UpdateSimulatingAndBlendWeight()
 {
 	GetSimulatingAndBlendWeight(SkelMeshComp, BodySetup, InstanceBlendWeight, bInstanceSimulatePhysics);
@@ -1883,6 +1985,8 @@ bool FBodyInstance::UpdateBodyScale(const FVector& InScale3D, bool bForceUpdate)
 		return false;
 	}
 
+	LocalBounds = FBox(EForceInit::ForceInit);
+
 	bool bSuccess = false;
 
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
@@ -2192,6 +2296,9 @@ bool FBodyInstance::UpdateBodyScale(const FVector& InScale3D, bool bForceUpdate)
 		GetAllShapes_AssumesLocked(Shapes);
 		ScaleMode = ComputeScaleMode(Shapes);
 
+		auto minOffset = FVector(+1000000.0f, +1000000.0f, +1000000.0f);
+		auto maxOffset = FVector(-1000000.0f, -1000000.0f, -1000000.0f);
+
 		FVector AdjustedScale3D;
 		FVector AdjustedScale3DAbs;
 
@@ -2226,6 +2333,12 @@ bool FBodyInstance::UpdateBodyScale(const FVector& InScale3D, bool bForceUpdate)
 
 					if (PSphereGeom.isValid())
 					{
+						auto centre = NewTranslation;
+						auto offset = PSphereGeom.radius;
+
+						minOffset = minOffset.ComponentMin(FVector(centre.X - offset, centre.Y - offset, centre.Z - offset));
+						maxOffset = maxOffset.ComponentMax(FVector(centre.X + offset, centre.Y + offset, centre.Z + offset));
+
 						UpdatedGeometry = &PSphereGeom;
 						bSuccess = true;
 					}
@@ -2249,6 +2362,15 @@ bool FBodyInstance::UpdateBodyScale(const FVector& InScale3D, bool bForceUpdate)
 
 					if (PBoxGeom.isValid())
 					{
+						auto centre = LocalTransform.GetTranslation();
+						auto offset = LocalTransform.TransformVector(FVector(PBoxGeom.halfExtents.x, PBoxGeom.halfExtents.y, PBoxGeom.halfExtents.z));
+
+						minOffset = minOffset.ComponentMin(centre - offset);
+						maxOffset = maxOffset.ComponentMax(centre - offset);
+
+						minOffset = minOffset.ComponentMin(centre + offset);
+						maxOffset = maxOffset.ComponentMax(centre + offset);
+
 						UpdatedGeometry = &PBoxGeom;
 						bSuccess = true;
 					}
@@ -2287,6 +2409,17 @@ bool FBodyInstance::UpdateBodyScale(const FVector& InScale3D, bool bForceUpdate)
 
 					if (PCapsuleGeom.isValid())
 					{
+						auto centre = LocalTransform.TransformPosition(FVector(PCapsuleGeom.halfHeight, 0.0f, 0.0f));
+						auto offset = PCapsuleGeom.radius;
+
+						minOffset = minOffset.ComponentMin(FVector(centre.X - offset, centre.Y - offset, centre.Z - offset));
+						maxOffset = maxOffset.ComponentMax(FVector(centre.X + offset, centre.Y + offset, centre.Z + offset));
+
+						centre = LocalTransform.TransformPosition(FVector(-PCapsuleGeom.halfHeight, 0.0f, 0.0f));
+
+						minOffset = minOffset.ComponentMin(FVector(centre.X - offset, centre.Y - offset, centre.Z - offset));
+						maxOffset = maxOffset.ComponentMax(FVector(centre.X + offset, centre.Y + offset, centre.Z + offset));
+
 						UpdatedGeometry = &PCapsuleGeom;
 						bSuccess = true;
 					}
@@ -2307,11 +2440,25 @@ bool FBodyInstance::UpdateBodyScale(const FVector& InScale3D, bool bForceUpdate)
 					PConvexGeom.convexMesh = bUseNegX ? ConvexElem->GetMirroredConvexMesh() : ConvexElem->GetConvexMesh();
 					PConvexGeom.scale.scale = U2PVector(AdjustedScale3DAbs);
 
+					// I'm pretty sure this TransformRotation is wrong and should be SetRotation.
+					// But I daren't change it for fear of breaking currently expected behaviour.
 					LocalTransform.TransformRotation(RelativeTM.GetRotation());
 					LocalTransform.ScaleTranslation(AdjustedScale3D);
 
 					if (PConvexGeom.isValid())
 					{
+						auto centre = PConvexGeom.convexMesh->getLocalBounds().getCenter();
+						auto offset = PConvexGeom.convexMesh->getLocalBounds().getExtents();
+
+						auto centreV = FVector(centre.x, centre.y, centre.z);
+						auto offsetV = LocalTransform.TransformVector(FVector(offset.x, offset.y, centre.z));
+
+						minOffset = minOffset.ComponentMin((centreV - offsetV) * AdjustedScale3DAbs);
+						maxOffset = maxOffset.ComponentMax((centreV - offsetV) * AdjustedScale3DAbs);
+
+						minOffset = minOffset.ComponentMin((centreV + offsetV) * AdjustedScale3DAbs);
+						maxOffset = maxOffset.ComponentMax((centreV + offsetV) * AdjustedScale3DAbs);
+
 						UpdatedGeometry = &PConvexGeom;
 						bSuccess = true;
 					}
@@ -2389,6 +2536,7 @@ bool FBodyInstance::UpdateBodyScale(const FVector& InScale3D, bool bForceUpdate)
 #endif // !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
 			}
 		}
+		LocalBounds = FBox(minOffset, maxOffset);
 	});
 
 	// if success, overwrite old Scale3D, otherwise, just don't do it. It will have invalid scale next time
@@ -3108,8 +3256,18 @@ void FBodyInstance::UpdateMassProperties()
 					// all together because each welded body may have different density etc
 					TMap<FBodyInstance*, FWeldedBatch> BodyToShapes;
 
+					auto restOffset = CVehicleRestOffset.GetValueOnGameThread();
+					auto contactOffset = CVehicleContactOffset.GetValueOnGameThread();
+
 					for (const FPhysicsShapeHandle& Shape : Shapes) //sort all welded children by their original bodies
 					{
+						if (bOverrideInertiaTensor == true &&
+							Shape.IsValid() == true)
+						{
+							Shape.Shape->setRestOffset(restOffset);
+							Shape.Shape->setContactOffset(contactOffset);
+						}
+
 						if (FWeldInfo* WeldInfo = ShapeToBodiesMap->Find(Shape))
 						{
 							FWeldedBatch* WeldedBatch = BodyToShapes.Find(WeldInfo->ChildBI);
@@ -3213,12 +3371,28 @@ void FBodyInstance::UpdateMassProperties()
 #else
 				PxQuat MassOrientation;
 				const FVector MassSpaceInertiaTensor = P2UVector(PxMassProperties::getMassSpaceInertia(TotalMassProperties.inertiaTensor, MassOrientation));
-				FPhysicsInterface::SetMassSpaceInertiaTensor_AssumesLocked(Actor, MassSpaceInertiaTensor);
 
 				FPhysicsInterface::SetMass_AssumesLocked(Actor, TotalMassProperties.mass);
 
-				FTransform Com(P2UQuat(MassOrientation), P2UVector(TotalMassProperties.centerOfMass));
-				FPhysicsInterface::SetComLocalPose_AssumesLocked(Actor, Com);
+				if (bOverrideInertiaTensor == true)
+				{
+					FPhysicsInterface::SetMassSpaceInertiaTensor_AssumesLocked(Actor, FVector(InertiaTensor.X * TotalMassProperties.mass, InertiaTensor.Y * TotalMassProperties.mass, InertiaTensor.Z * TotalMassProperties.mass));
+				}
+				else
+				{
+					FPhysicsInterface::SetMassSpaceInertiaTensor_AssumesLocked(Actor, MassSpaceInertiaTensor);
+				}
+
+				if (bCentraliseMass == true)
+				{
+					FTransform Com = FTransform(COMNudge);
+					FPhysicsInterface::SetComLocalPose_AssumesLocked(Actor, Com);
+				}
+				else
+				{
+					FTransform Com(P2UQuat(MassOrientation), P2UVector(TotalMassProperties.centerOfMass));
+					FPhysicsInterface::SetComLocalPose_AssumesLocked(Actor, Com);
+				}
 #endif
 			}
 		});

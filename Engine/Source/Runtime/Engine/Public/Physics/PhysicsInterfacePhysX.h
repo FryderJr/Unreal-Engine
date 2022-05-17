@@ -300,8 +300,10 @@ struct ENGINE_API FPhysicsInterface_PhysX : public FGenericPhysicsInterface, pub
 
 	static void AddImpulse_AssumesLocked(const FPhysicsActorHandle_PhysX& InHandle, const FVector& InForce);
 	static void AddAngularImpulseInRadians_AssumesLocked(const FPhysicsActorHandle_PhysX& InHandle, const FVector& InTorque);
+	static void AddForce_AssumesLocked(const FPhysicsActorHandle_PhysX& InHandle, const FVector& InForce);
 	static void AddVelocity_AssumesLocked(const FPhysicsActorHandle_PhysX& InHandle, const FVector& InForce);
 	static void AddAngularVelocityInRadians_AssumesLocked(const FPhysicsActorHandle_PhysX& InHandle, const FVector& InTorque);
+	static void AddForceAtLocation_AssumesLocked(const FPhysicsActorHandle_PhysX& InHandle, const FVector& InImpulse, const FVector& InLocation);
 	static void AddImpulseAtLocation_AssumesLocked(const FPhysicsActorHandle_PhysX& InHandle, const FVector& InImpulse, const FVector& InLocation);
 	static void AddRadialImpulse_AssumesLocked(const FPhysicsActorHandle_PhysX& InHandle, const FVector& InOrigin, float InRadius, float InStrength, ERadialImpulseFalloff InFalloff, bool bInVelChange);
 

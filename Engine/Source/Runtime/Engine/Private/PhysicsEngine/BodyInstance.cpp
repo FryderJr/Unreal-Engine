@@ -3353,6 +3353,7 @@ void FBodyInstance::UpdateMassProperties()
 				}
 
 				// #PHYS2 Refactor out PxMassProperties (Our own impl?)
+				PxQuat MassOrientation;
 #if WITH_CHAOS
 				// Note: We expect the inertia to be diagonal at this point
 				// Only set mass properties if inertia tensor is valid. TODO Remove this once we track down cause of empty tensors.
@@ -3369,9 +3370,8 @@ void FBodyInstance::UpdateMassProperties()
 					FPhysicsInterface::SetComLocalPose_AssumesLocked(Actor, Com);
 				}
 #else
-				PxQuat MassOrientation;
 				const FVector MassSpaceInertiaTensor = P2UVector(PxMassProperties::getMassSpaceInertia(TotalMassProperties.inertiaTensor, MassOrientation));
-
+#endif
 				FPhysicsInterface::SetMass_AssumesLocked(Actor, TotalMassProperties.mass);
 
 				if (bOverrideInertiaTensor == true)
@@ -3393,7 +3393,7 @@ void FBodyInstance::UpdateMassProperties()
 					FTransform Com(P2UQuat(MassOrientation), P2UVector(TotalMassProperties.centerOfMass));
 					FPhysicsInterface::SetComLocalPose_AssumesLocked(Actor, Com);
 				}
-#endif
+
 			}
 		});
 	}

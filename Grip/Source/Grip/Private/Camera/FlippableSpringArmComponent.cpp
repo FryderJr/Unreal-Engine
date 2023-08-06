@@ -445,7 +445,11 @@ void UFlippableSpringArmComponent::UpdateDesiredArmProperties(const FTransform& 
 
 		// Calculate what the desired rotation should be.
 
-		bool surfaceDirectionValid = true;
+#pragma region VehicleContactSensors
+
+		bool surfaceDirectionValid = vehicle->IsSurfaceDirectionValid(1.0f);
+
+#pragma endregion VehicleContactSensors
 
 		if (flipped == true)
 		{
@@ -479,8 +483,12 @@ void UFlippableSpringArmComponent::UpdateDesiredArmProperties(const FTransform& 
 
 		Rotations[(int32)EFollowingMode::Airborne] = AirborneVehicleHeading;
 
-		bool hasSomeIdeaOfSurface = true;
-		bool hasGoodIdeaOfSurface = true;
+#pragma region VehicleContactSensors
+
+		bool hasSomeIdeaOfSurface = vehicle->GetWheels().HasSurfaceDirection();
+		bool hasGoodIdeaOfSurface = vehicle->GetWheels().HasConfidentSurfaceDirection();
+
+#pragma endregion VehicleContactSensors
 
 		if (Airborne == true &&
 			ContactModeTime != 0.0f &&
